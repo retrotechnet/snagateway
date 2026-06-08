@@ -1,0 +1,30 @@
+{
+  "_comment": "snagateway example config. Each SNA Server (PU) gets a connection; each LU on that PU maps to a TN3270 target.",
+
+  "llc2": {
+    "interface": "eth0",
+    "local_sap": "0x04",
+    "_comment": "Gateway's own 802.2 link. local_sap 0x04 is the conventional SNA SAP."
+  },
+
+  "default_target": {
+    "host": "192.168.1.50",
+    "port": 3270,
+    "model": "IBM-3278-2",
+    "tn3270e": false
+  },
+
+  "connections": [
+    {
+      "name": "SNASERVER1",
+      "remote_mac": "00:0C:29:AA:BB:CC",
+      "remote_sap": "0x04",
+      "_comment": "remote_mac is the NT4 SNA Server box's NIC. Define a matching 802.2 host connection in SNA Manager pointing at THIS gateway's MAC.",
+      "lus": [
+        { "lu": 2, "target": { "host": "192.168.1.50", "port": 3270, "model": "IBM-3278-2" } },
+        { "lu": 3, "target": { "host": "192.168.1.50", "port": 3270, "model": "IBM-3278-2" } },
+        { "lu": 4, "target": { "host": "192.168.1.60", "port": 3270, "model": "IBM-3279-2" } }
+      ]
+    }
+  ]
+}

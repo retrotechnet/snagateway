@@ -1,0 +1,357 @@
+package main
+
+import (
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"snagateway/internal/bridge"
+	"snagateway/internal/d3270"
+	"snagateway/internal/llc2"
+	"snagateway/internal/sna"
+	"snagateway/internal/tn3270"
+)
+
+// cmdSNAProbe dials SNA Server (active LLC2 open), then drives the host-side SNA
+// activation sequence: ACTPU, then ACTLU for each LU, logging and parsing every
+// response. After activation it keeps reading so we can observe what SNA Server
+// sends next (NOTIFY, logon/INIT-SELF, etc.). RU formats are overridable via
+// hex flags so we can tune them against live responses without recompiling.
+func cmdSNAProbe(args []string) {
+	fs := flag.NewFlagSet("sna-probe", flag.ExitOnError)
+	iface := fs.String("iface", "", "network interface, e.g. ens33")
+	connect := fs.String("connect", "", "SNA Server MAC to dial (active open)")
+	sapStr := fs.String("sap", "0x04", "local & remote SAP (hex)")
+	lusStr := fs.String("lus", "2", "comma-separated LU local addresses to ACTLU")
+	actpuHex := fs.String("actpu", "", "override ACTPU RU (hex, e.g. 110105...)")
+	actluHex := fs.String("actlu", "", "override ACTLU RU (hex, e.g. 0D0101)")
+	waitSec := fs.Int("wait", 5, "seconds to wait for each response")
+	dialTries := fs.Int("dialtries", 15, "dial attempts (each ~3s) to catch SNA Server's ~19s call cycle")
+	bind := fs.Bool("bind", true, "auto-send BIND+SDT when an LU signals a session request (NOTIFY status 03)")
+	bindHex := fs.String("bind-image", "", "override BIND image RU (hex)")
+	plu := fs.Int("plu", 0, "PLU (host) local address used as the LU-LU session OAF")
+	odai := fs.Bool("odai", false, "ODAI bit for the LU-LU session (true = peripheral-assigned LFSID)")
+	target := fs.String("target", "", "TN3270 back end host:port to bridge a bound LU session to (e.g. 10.0.0.14:3270)")
+	targetModel := fs.String("target-model", "IBM-3278-2", "TN3270 terminal model for -target")
+	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
+	fs.Parse(args)
+
+	bindImage := sna.DefaultBind
+	if *bindHex != "" {
+		bindImage = mustHex(*bindHex)
+	}
+
+	if *iface == "" || *connect == "" {
+		fmt.Fprintln(os.Stderr, "sna-probe: -iface and -connect are required")
+		fs.Usage()
+		os.Exit(2)
+	}
+	sap, err := parseHexByte(*sapStr)
+	if err != nil {
+		log.Fatalf("sna-probe: bad -sap %q: %v", *sapStr, err)
+	}
+	mac, err := net.ParseMAC(*connect)
+	if err != nil {
+		log.Fatalf("sna-probe: bad -connect %q: %v", *connect, err)
+	}
+	lus, err := parseLUs(*lusStr)
+	if err != nil {
+		log.Fatalf("sna-probe: bad -lus %q: %v", *lusStr, err)
+	}
+	actpuRU := sna.DefaultActPU
+	if *actpuHex != "" {
+		actpuRU = mustHex(*actpuHex)
+	}
+	actluRU := sna.DefaultActLU
+	if *actluHex != "" {
+		actluRU = mustHex(*actluHex)
+	}
+
+	log.Printf("sna-probe: dialing %s SAP 0x%02X (up to %d tries) ...", mac, sap, *dialTries)
+	cfg := llc2.Config{Interface: *iface, LocalSAP: sap}
+	var conn llc2.Conn
+	for attempt := 1; ; attempt++ {
+		conn, err = llc2.Dial(cfg, mac, sap)
+		if err == nil {
+			break
+		}
+		if attempt >= *dialTries {
+			log.Fatalf("sna-probe: dial failed after %d attempts: %v (is SNA Server set to Outgoing and calling? check for xid polls)", attempt, err)
+		}
+		log.Printf("sna-probe: dial attempt %d/%d: %v — retrying", attempt, *dialTries, err)
+		time.Sleep(1 * time.Second)
+	}
+	defer conn.Close()
+	log.Printf("sna-probe: LINK UP -> %s", conn.RemoteMAC())
+
+	pr := &piuReader{conn: conn} // splits coalesced PIUs out of each LLC2 read
+	wait := time.Duration(*waitSec) * time.Second
+	var snf uint16 = 0x0001
+
+	send(conn, "ACTPU", sna.BuildActPU(snf, actpuRU))
+	if _, ok := recv(pr, wait); !ok {
+		log.Printf("sna-probe: no ACTPU response — aborting (the PU never activated)")
+		return
+	}
+
+	for _, lu := range lus {
+		snf++
+		send(conn, fmt.Sprintf("ACTLU(LU %d)", lu), sna.BuildActLU(lu, snf, actluRU))
+		recv(pr, wait)
+	}
+
+	log.Printf("sna-probe: activation sequence done; observing + auto-acking inbound requests (Ctrl-C to stop)")
+	_ = conn.SetReadDeadline(time.Time{}) // block indefinitely
+	bound := false
+	var session *sna.LU2Session // non-nil once the LU-LU session is bridged
+	for {
+		piu, err := pr.Read()
+		if err != nil {
+			log.Printf("sna-probe: read ended: %v", err)
+			return
+		}
+		summary, _ := sna.DescribeResponse(piu)
+		log.Printf("sna-probe: <- %-3d bytes: % X  [%s]", len(piu), piu, summary)
+
+		p, perr := sna.ParsePIU(piu)
+		if perr != nil || p.RH.Response {
+			continue
+		}
+
+		// Auto-acknowledge inbound requests (NOTIFY, logon, terminal input) so
+		// the dialog and bracket protocol keep flowing.
+		if rsp, rerr := sna.BuildPositiveResponse(piu); rerr == nil {
+			log.Printf("sna-probe: -> +RSP(%s)  % X", sna.RequestName(p), rsp)
+			if werr := conn.Write(rsp); werr != nil {
+				log.Printf("sna-probe:    +RSP write failed: %v", werr)
+			}
+		}
+
+		// USS mode: when the applet signals it's ready (NOTIFY status 03), either
+		// bridge a TN3270 host over the SSCP-LU session (-target) or paint a
+		// static test screen — both without a BIND.
+		if *ussTest && session == nil && isAppReadyNotify(p) {
+			lu := p.TH.OAF
+			if *target != "" {
+				session = startSSCPLUBridge(conn, lu, *target, *targetModel)
+			} else {
+				screen := uss3270TestScreen()
+				snf++
+				log.Printf("sna-probe: -> USS test screen on SSCP-LU (LU %d): %d bytes", lu, len(screen))
+				if werr := conn.Write(sna.BuildSSCPLUData(lu, snf, screen)); werr != nil {
+					log.Printf("sna-probe:    USS screen write failed: %v", werr)
+				}
+			}
+			continue
+		}
+
+		// Once bridged, inbound FMD data is the terminal's input (AID + modified
+		// fields) — hand it to the bridge to forward to the TN3270 host.
+		if session != nil && p.RH.Category == sna.CategoryFMD && !p.RH.FI {
+			session.Deliver(p.RU)
+			continue
+		}
+
+		// Host-initiated session: the LU's logon is an FMD request (FI=0) on the
+		// SSCP-LU session, after the NOTIFY status-03. On it, drive BIND then SDT
+		// to bring up the LU-LU session, then bridge it to the TN3270 back end.
+		if *bind && !*ussTest && !bound && isLogonRequest(p) {
+			bound = true
+			lu := p.TH.OAF
+			snf++
+			send(conn, fmt.Sprintf("BIND(LU %d)", lu), sna.BuildBind(lu, byte(*plu), *odai, snf, bindImage))
+			rsp, ok := recv(pr, wait)
+			if !ok {
+				bound = false
+				_ = conn.SetReadDeadline(time.Time{})
+				continue
+			}
+			if _, positive := sna.DescribeResponse(rsp); !positive {
+				log.Printf("sna-probe:    BIND rejected — not sending SDT")
+				bound = false
+				_ = conn.SetReadDeadline(time.Time{})
+				continue
+			}
+			snf++
+			send(conn, fmt.Sprintf("SDT(LU %d)", lu), sna.BuildSDT(lu, byte(*plu), *odai, snf))
+			recv(pr, wait)
+			_ = conn.SetReadDeadline(time.Time{}) // back to blocking observe
+
+			// Session is up: bridge it to the TN3270 back end if configured.
+			if *target != "" {
+				session = startBridge(conn, lu, byte(*plu), *odai, *target, *targetModel)
+			} else {
+				log.Printf("sna-probe: LU %d session active (no -target; not bridging)", lu)
+			}
+		}
+	}
+}
+
+func send(c llc2.Conn, name string, piu []byte) {
+	log.Printf("sna-probe: -> %-12s % X", name, piu)
+	if err := c.Write(piu); err != nil {
+		log.Printf("sna-probe: write %s failed: %v", name, err)
+	}
+}
+
+// piuReader wraps an llc2.Conn and hands out one SNA PIU per call, splitting any
+// coalesced PIUs the kernel returned in a single read (see sna.SplitPIUs).
+type piuReader struct {
+	conn  llc2.Conn
+	queue [][]byte
+}
+
+func (r *piuReader) dequeue() []byte {
+	piu := r.queue[0]
+	r.queue = r.queue[1:]
+	return piu
+}
+
+// Read returns the next PIU, blocking until one is available.
+func (r *piuReader) Read() ([]byte, error) {
+	for len(r.queue) == 0 {
+		_ = r.conn.SetReadDeadline(time.Time{})
+		buf, err := r.conn.Read()
+		if err != nil {
+			return nil, err
+		}
+		r.queue = sna.SplitPIUs(buf)
+	}
+	return r.dequeue(), nil
+}
+
+// ReadTimeout returns the next PIU, waiting at most wait for a fresh read.
+func (r *piuReader) ReadTimeout(wait time.Duration) ([]byte, error) {
+	if len(r.queue) > 0 {
+		return r.dequeue(), nil
+	}
+	_ = r.conn.SetReadDeadline(time.Now().Add(wait))
+	buf, err := r.conn.Read()
+	if err != nil {
+		return nil, err
+	}
+	r.queue = sna.SplitPIUs(buf)
+	return r.dequeue(), nil
+}
+
+func recv(r *piuReader, wait time.Duration) ([]byte, bool) {
+	piu, err := r.ReadTimeout(wait)
+	if err != nil {
+		log.Printf("sna-probe: <- (no response within %s: %v)", wait, err)
+		return nil, false
+	}
+	summary, _ := sna.DescribeResponse(piu)
+	log.Printf("sna-probe: <- %-3d bytes: % X  [%s]", len(piu), piu, summary)
+	return piu, true
+}
+
+// startBridge dials the TN3270 back end and couples it to a freshly-bound LU2
+// session, pumping 3270 data both ways. Returns the session (so the read loop
+// can Deliver inbound terminal input), or nil if the back end couldn't be dialed.
+func startBridge(conn llc2.Conn, lu, plu byte, odai bool, target, model string) *sna.LU2Session {
+	host, err := tn3270.Dial(tn3270.Options{Addr: target, TermType: model, Timeout: 15 * time.Second})
+	if err != nil {
+		log.Printf("sna-probe: LU %d: back-end dial %s failed: %v (session up but not bridged)", lu, target, err)
+		return nil
+	}
+	session := sna.NewLUSession(conn, lu, plu, odai)
+	log.Printf("sna-probe: LU %d bridged to %s (%s)", lu, target, model)
+	go func() {
+		if err := bridge.New(session, host, log.Default()).Run(); err != nil {
+			log.Printf("sna-probe: LU %d bridge ended: %v", lu, err)
+		}
+		host.Close()
+		session.Close()
+	}()
+	return session
+}
+
+// startSSCPLUBridge dials the TN3270 back end and relays its 3270 screens to the
+// terminal over the SSCP-LU session (USS mode — no BIND). Inbound terminal data
+// on the SSCP-LU session is forwarded to the host. Returns the session, or nil
+// if the back end couldn't be dialed.
+func startSSCPLUBridge(conn llc2.Conn, lu byte, target, model string) *sna.LU2Session {
+	host, err := tn3270.Dial(tn3270.Options{Addr: target, TermType: model, Timeout: 15 * time.Second})
+	if err != nil {
+		log.Printf("sna-probe: LU %d: back-end dial %s failed: %v", lu, target, err)
+		return nil
+	}
+	session := sna.NewSSCPLUSession(conn, lu)
+	log.Printf("sna-probe: LU %d bridged to %s over the SSCP-LU session (%s)", lu, target, model)
+	go func() {
+		if err := bridge.New(session, host, log.Default()).Run(); err != nil {
+			log.Printf("sna-probe: LU %d SSCP-LU bridge ended: %v", lu, err)
+		}
+		host.Close()
+		session.Close()
+	}()
+	return session
+}
+
+// isAppReadyNotify reports whether a request PIU is a NOTIFY (NS 81 06 20) with
+// status byte 0x03 — the LU signaling that a client/applet has attached.
+func isAppReadyNotify(p *sna.PIU) bool {
+	return len(p.RU) >= 6 &&
+		p.RU[0] == 0x81 && p.RU[1] == 0x06 && p.RU[2] == 0x20 &&
+		p.RU[5] == 0x03
+}
+
+// uss3270TestScreen builds a simple 3270 Erase/Write data stream to display over
+// the SSCP-LU session, to verify the screen reaches the terminal without a BIND.
+func uss3270TestScreen() []byte {
+	out := []byte{d3270.CmdEW, 0xC3} // Erase/Write + WCC (reset MDT, restore keyboard)
+	sba := func(row, col int) {
+		b0, b1 := d3270.EncodeAddr(row*80 + col)
+		out = append(out, d3270.OrderSBA, b0, b1)
+	}
+	sba(2, 20)
+	out = append(out, d3270.A2EBytes("SNAGATEWAY  --  SSCP-LU DISPLAY TEST")...)
+	sba(4, 20)
+	out = append(out, d3270.A2EBytes("If you can read this on the applet,")...)
+	sba(5, 20)
+	out = append(out, d3270.A2EBytes("the SSCP-LU 3270 data path works.")...)
+	return out
+}
+
+// isLogonRequest reports whether a request PIU is the dependent LU's USS logon:
+// an FMD request WITHOUT a format indicator (FI=0 = raw character-coded data, no
+// NS header). NOTIFY is also FMD but has FI=1, so this excludes it. Empty RU = a
+// bare Enter; non-empty = a typed command (e.g. "test" = A3 85 A2 A3). This is
+// our cue to drive the BIND.
+func isLogonRequest(p *sna.PIU) bool {
+	return p.RH.Category == sna.CategoryFMD && !p.RH.FI
+}
+
+func parseLUs(s string) ([]byte, error) {
+	var out []byte
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, err
+		}
+		if v < 0 || v > 255 {
+			return nil, fmt.Errorf("LU %d out of range 0-255", v)
+		}
+		out = append(out, byte(v))
+	}
+	return out, nil
+}
+
+func mustHex(s string) []byte {
+	s = strings.ReplaceAll(strings.ReplaceAll(s, " ", ""), "0x", "")
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		log.Fatalf("sna-probe: bad hex %q: %v", s, err)
+	}
+	return b
+}

@@ -1,0 +1,12 @@
+# Build artifacts
+/snagateway
+/snagateway.exe
+/snagateway-linux-amd64
+*.exe
+
+# Local config (copy config.example.json -> config.json)
+/config.json
+
+# Go
+*.test
+*.out
