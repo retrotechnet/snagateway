@@ -37,6 +37,7 @@ func cmdSNAProbe(args []string) {
 	bindHex := fs.String("bind-image", "", "override BIND image RU (hex)")
 	plu := fs.Int("plu", 0, "PLU (host) local address used as the LU-LU session OAF")
 	odai := fs.Bool("odai", false, "ODAI bit for the LU-LU session (true = peripheral-assigned LFSID)")
+	bindSweep := fs.Bool("bind-sweep", false, "on logon, sweep LU-LU LFSIDs (OAF/ODAI) looking for one SNA Server accepts")
 	target := fs.String("target", "", "TN3270 back end host:port to bridge a bound LU session to (e.g. 10.0.0.14:3270)")
 	targetModel := fs.String("target-model", "IBM-3278-2", "TN3270 terminal model for -target")
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
@@ -188,6 +189,11 @@ func cmdSNAProbe(args []string) {
 		if *bind && !*ussTest && !bound && isLogonRequest(p) {
 			bound = true
 			lu := p.TH.OAF
+			if *bindSweep {
+				sweepBind(conn, pr, lu, bindImage, &snf)
+				_ = conn.SetReadDeadline(time.Time{})
+				continue
+			}
 			snf++
 			send(conn, fmt.Sprintf("BIND(LU %d)", lu), sna.BuildBind(lu, byte(*plu), *odai, snf, bindImage))
 			rsp, ok := recv(pr, wait)
@@ -294,6 +300,36 @@ func startBridge(conn llc2.Conn, lu, plu byte, odai bool, target, model string) 
 		session.Close()
 	}()
 	return session
+}
+
+// sweepBind tries a range of LU-LU LFSIDs (OAF + ODAI) for the BIND, logging the
+// response class for each, to discover the one SNA Server will accept. ODAI=1
+// (peripheral-assigned) is tried first since those attempts were processed
+// (sense 800F) rather than dropped. Stops on a positive response.
+func sweepBind(conn llc2.Conn, pr *piuReader, lu byte, image []byte, snf *uint16) {
+	const wait = 2 * time.Second
+	log.Printf("sna-probe: BIND sweep starting (LU %d) ...", lu)
+	for _, odai := range []bool{true, false} {
+		for oaf := byte(1); oaf <= 12; oaf++ {
+			if oaf == lu {
+				continue
+			}
+			*snf++
+			_ = conn.Write(sna.BuildBind(lu, oaf, odai, *snf, image))
+			rsp, ok := recv(pr, wait)
+			if !ok {
+				log.Printf("sna-probe:   OAF=%2d ODAI=%-5v -> (silent)", oaf, odai)
+				continue
+			}
+			summary, positive := sna.DescribeResponse(rsp)
+			log.Printf("sna-probe:   OAF=%2d ODAI=%-5v -> %s", oaf, odai, summary)
+			if positive {
+				log.Printf("sna-probe: *** BIND ACCEPTED: OAF=%d ODAI=%v *** (report this!)", oaf, odai)
+				return
+			}
+		}
+	}
+	log.Printf("sna-probe: BIND sweep exhausted — no LFSID accepted")
 }
 
 // startSSCPLUBridge dials the TN3270 back end and relays its 3270 screens to the
