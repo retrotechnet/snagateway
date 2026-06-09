@@ -80,34 +80,29 @@ func (s *LU2Session) SendToTerminal(ds []byte) error {
 const maxSSCPLUData = 1400
 
 // sendSSCPLU renders the host 3270 write into the session's screen buffer (which
-// correctly applies all positioning/field orders), then re-emits the buffer as a
-// linear character stream — no SBA/SF orders, which the SSCP-LU applet cannot
-// process. Large screens are split across continuation Writes.
+// correctly applies all positioning/field orders), then re-emits the buffer as
+// pure character-coded (USS) data — no 3270 command, WCC, or orders. This applet
+// treats the SSCP-LU RU as raw display text (it printed the EW/WCC bytes as "5C"
+// and ignored SBA), and character-coded data leaves the keyboard unlocked for
+// line input. Large screens are split into multiple data chunks.
 func (s *LU2Session) sendSSCPLU(ds []byte) error {
 	_ = s.screen.Apply(ds)
 	linear := s.screen.Linear()
 	if OnSSCPLUSend != nil {
 		OnSSCPLUSend(ds, linear)
 	}
-	for off := 0; ; {
+	for off := 0; off < len(linear); {
 		end := off + maxSSCPLUData
 		if end > len(linear) {
 			end = len(linear)
 		}
-		cmd := byte(d3270.CmdW) // continuation: keep filling from current address
-		if off == 0 {
-			cmd = d3270.CmdEW // first chunk erases and starts at 0
-		}
-		out := append([]byte{cmd, 0xC3}, linear[off:end]...) // WCC: reset MDT + restore keyboard
 		s.snf++
-		if err := s.conn.Write(BuildSSCPLUData(s.lu, s.snf, out)); err != nil {
+		if err := s.conn.Write(BuildSSCPLUData(s.lu, s.snf, linear[off:end])); err != nil {
 			return err
 		}
 		off = end
-		if off >= len(linear) {
-			return nil
-		}
 	}
+	return nil
 }
 
 // FromTerminal yields inbound terminal->host 3270 data streams.
