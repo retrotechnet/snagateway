@@ -40,7 +40,21 @@ func cmdSNAProbe(args []string) {
 	target := fs.String("target", "", "TN3270 back end host:port to bridge a bound LU session to (e.g. 10.0.0.14:3270)")
 	targetModel := fs.String("target-model", "IBM-3278-2", "TN3270 terminal model for -target")
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
+	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
+
+	if *dump {
+		sna.OnSSCPLUSend = func(original, flattened []byte) {
+			n := func(b []byte) []byte {
+				if len(b) > 192 {
+					return b[:192]
+				}
+				return b
+			}
+			log.Printf("sna-probe: SSCP-LU host orig %d bytes: % X", len(original), n(original))
+			log.Printf("sna-probe: SSCP-LU flattened %d bytes: % X", len(flattened), n(flattened))
+		}
+	}
 
 	bindImage := sna.DefaultBind
 	if *bindHex != "" {

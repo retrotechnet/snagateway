@@ -27,6 +27,10 @@ type LU2Session struct {
 	once    sync.Once
 }
 
+// OnSSCPLUSend, if set, is a debug hook invoked for each screen relayed over the
+// SSCP-LU session with the original and flattened 3270 data streams.
+var OnSSCPLUSend func(original, flattened []byte)
+
 // NewLUSession creates an active LU2 session bound to conn with the given LU-LU
 // addressing (lu = SLU local address, plu = PLU/host address, odai = ODAI bit).
 func NewLUSession(conn llc2.Conn, lu, plu byte, odai bool) *LU2Session {
@@ -63,7 +67,11 @@ func (s *LU2Session) SendToTerminal(ds []byte) error {
 	if s.viaSSCPLU {
 		// SSCP-LU terminals are base-mode (no extended-attribute negotiation),
 		// so flatten color/extended orders to avoid on-screen garbage.
-		return s.conn.Write(BuildSSCPLUData(s.lu, s.snf, d3270.Flatten(ds)))
+		flat := d3270.Flatten(ds)
+		if OnSSCPLUSend != nil {
+			OnSSCPLUSend(ds, flat)
+		}
+		return s.conn.Write(BuildSSCPLUData(s.lu, s.snf, flat))
 	}
 	begin := s.firstSend
 	s.firstSend = false
