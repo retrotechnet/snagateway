@@ -1,16 +1,18 @@
 package d3270
 
-// Flatten rewrites an inbound 3270 write data stream into base form for a
-// terminal without extended-attribute support (e.g. a dependent LU running over
-// the SSCP-LU session, which never negotiates color/extended attributes). It:
+// Flatten rewrites an inbound 3270 write data stream into UNFORMATTED form for a
+// terminal that processes only Erase/Write, WCC, SBA and character data — which
+// is how the MS SNA Server 3270 applet behaves over the SSCP-LU session (it does
+// not interpret field orders, printing them as garbage). It:
 //
-//   - reduces Start Field Extended (SFE) to a basic Start Field (SF) using the
-//     field's basic attribute, dropping the color/highlight/extended pairs;
+//   - replaces each Start Field (SF) and Start Field Extended (SFE) with a single
+//     blank cell — preserving the one screen position a field attribute occupies,
+//     which a real terminal shows blank anyway;
 //   - drops Set Attribute (SA) orders;
 //   - passes commands, WCC, SBA/RA/EUA, IC/PT, GE and character data through.
 //
-// Without this, a base-mode terminal renders the extended-attribute bytes as
-// stray characters (the "?A&" / "?CO" garbage seen on the applet).
+// The result is positioned text with no field structure, which the base-mode
+// terminal renders cleanly (monochrome — color/fields need a full LU-LU session).
 func Flatten(data []byte) []byte {
 	if len(data) == 0 {
 		return data
@@ -40,26 +42,15 @@ func Flatten(data []byte) []byte {
 			out = append(out, data[i:minInt(i+4, len(data))]...)
 			i += 4
 		case OrderSF:
-			if i+1 < len(data) {
-				out = append(out, OrderSF, data[i+1])
-			}
+			out = append(out, 0x40) // field attribute cell -> blank
 			i += 2
 		case OrderSFE:
 			if i+1 >= len(data) {
 				i++
 				continue
 			}
-			npairs := int(data[i+1])
-			j := i + 2
-			var basic byte // default attribute if no basic (0xC0) pair present
-			for p := 0; p < npairs && j+1 < len(data); p++ {
-				if data[j] == 0xC0 { // basic field attribute pair
-					basic = data[j+1]
-				}
-				j += 2
-			}
-			out = append(out, OrderSF, basic)
-			i = j
+			out = append(out, 0x40) // field attribute cell -> blank
+			i += 2 + int(data[i+1])*2
 		case OrderSA:
 			i += 3 // drop Set Attribute (type + value)
 		case OrderMF:
