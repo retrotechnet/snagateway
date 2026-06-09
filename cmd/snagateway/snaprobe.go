@@ -147,6 +147,16 @@ func cmdSNAProbe(args []string) {
 			}
 		}
 
+		// Client disconnected (NOTIFY status 01 while a bridge is active): tear
+		// the bridge down and reset so a reconnect starts a fresh session
+		// (otherwise the gateway needs a restart to reconnect the applet).
+		if session != nil && isAppIdleNotify(p) {
+			log.Printf("sna-probe: LU %d client disconnected — closing bridge", p.TH.OAF)
+			session.Close()
+			session = nil
+			continue
+		}
+
 		// USS mode: when the applet signals it's ready (NOTIFY status 03), either
 		// bridge a TN3270 host over the SSCP-LU session (-target) or paint a
 		// static test screen — both without a BIND.
@@ -311,9 +321,17 @@ func startSSCPLUBridge(conn llc2.Conn, lu byte, target, model string) *sna.LU2Se
 // isAppReadyNotify reports whether a request PIU is a NOTIFY (NS 81 06 20) with
 // status byte 0x03 — the LU signaling that a client/applet has attached.
 func isAppReadyNotify(p *sna.PIU) bool {
-	return len(p.RU) >= 6 &&
-		p.RU[0] == 0x81 && p.RU[1] == 0x06 && p.RU[2] == 0x20 &&
-		p.RU[5] == 0x03
+	return isNotify(p) && p.RU[5] == 0x03
+}
+
+// isAppIdleNotify reports whether a request PIU is a NOTIFY with status byte
+// 0x01 — the LU signaling it is idle (e.g. the client disconnected).
+func isAppIdleNotify(p *sna.PIU) bool {
+	return isNotify(p) && p.RU[5] == 0x01
+}
+
+func isNotify(p *sna.PIU) bool {
+	return len(p.RU) >= 6 && p.RU[0] == 0x81 && p.RU[1] == 0x06 && p.RU[2] == 0x20
 }
 
 // uss3270TestScreen builds a simple 3270 Erase/Write data stream to display over
