@@ -75,29 +75,48 @@ func (s *LU2Session) SendToTerminal(ds []byte) error {
 	return s.conn.Write(BuildFMD(s.lu, s.plu, s.odai, s.snf, ds, begin))
 }
 
-// maxSSCPLUData bounds the 3270 data per PIU to stay under SNA Server's BTU
-// (1493); a continuation Write (no SBA) resumes filling where the prior left off.
-const maxSSCPLUData = 1400
+// maxSegPayload bounds each PIU's payload (after the 6-byte TH) to stay under
+// SNA Server's BTU (~1493, capped by the Ethernet frame size).
+const maxSegPayload = 1480
 
 // sendSSCPLU renders the host 3270 write into the session's screen buffer (which
 // correctly applies all positioning/field orders), then re-emits the buffer as
 // pure character-coded (USS) data — no 3270 command, WCC, or orders. This applet
 // treats the SSCP-LU RU as raw display text (it printed the EW/WCC bytes as "5C"
-// and ignored SBA), and character-coded data leaves the keyboard unlocked for
-// line input. Large screens are split into multiple data chunks.
+// and ignored SBA), and character-coded data leaves the keyboard unlocked.
+//
+// A screen larger than the BTU is sent as one BIU SEGMENTED across multiple PIUs
+// (FID2 mapping field first/middle/last, sharing one SNF). SNA Server reassembles
+// the segments into a single message for the terminal, so the screen fills
+// continuously instead of arriving as several mis-placed pieces.
 func (s *LU2Session) sendSSCPLU(ds []byte) error {
 	_ = s.screen.Apply(ds)
 	linear := s.screen.Linear()
 	if OnSSCPLUSend != nil {
 		OnSSCPLUSend(ds, linear)
 	}
-	for off := 0; off < len(linear); {
-		end := off + maxSSCPLUData
-		if end > len(linear) {
-			end = len(linear)
+
+	s.snf++
+	rh := RH{Category: CategoryFMD, BCI: true, ECI: true, DR1: true}.Bytes()
+	biu := append(append([]byte{}, rh...), linear...) // RH + RU
+
+	if len(biu) <= maxSegPayload {
+		th := TH{MPF: MPFWhole, DAF: s.lu, OAF: 0x00, SNF: s.snf}
+		return s.conn.Write(append(th.Bytes(), biu...))
+	}
+	for off := 0; off < len(biu); {
+		end := off + maxSegPayload
+		if end > len(biu) {
+			end = len(biu)
 		}
-		s.snf++
-		if err := s.conn.Write(BuildSSCPLUData(s.lu, s.snf, linear[off:end])); err != nil {
+		mpf := byte(MPFMiddle)
+		if off == 0 {
+			mpf = MPFFirst
+		} else if end >= len(biu) {
+			mpf = MPFLast
+		}
+		th := TH{MPF: mpf, DAF: s.lu, OAF: 0x00, SNF: s.snf}
+		if err := s.conn.Write(append(th.Bytes(), biu[off:end]...)); err != nil {
 			return err
 		}
 		off = end
