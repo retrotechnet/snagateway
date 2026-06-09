@@ -296,7 +296,7 @@ func startSSCPLUBridge(conn llc2.Conn, lu byte, target, model string) *sna.LU2Se
 		log.Printf("sna-probe: LU %d: back-end dial %s failed: %v", lu, target, err)
 		return nil
 	}
-	session := sna.NewSSCPLUSession(conn, lu)
+	session := sna.NewSSCPLUSession(conn, lu, model)
 	log.Printf("sna-probe: LU %d bridged to %s over the SSCP-LU session (%s)", lu, target, model)
 	go func() {
 		if err := bridge.New(session, host, log.Default()).Run(); err != nil {

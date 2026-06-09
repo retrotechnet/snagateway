@@ -16,7 +16,8 @@ type LU2Session struct {
 	lu        byte // SLU local address
 	plu       byte // PLU/host local address (LU-LU session OAF)
 	odai      bool // LU-LU session ODAI
-	viaSSCPLU bool // send over the SSCP-LU session (USS mode) instead of LU-LU
+	viaSSCPLU bool          // send over the SSCP-LU session (USS mode) instead of LU-LU
+	screen    *d3270.Screen // SSCP-LU: render buffer (the applet ignores positioning orders)
 
 	mu        sync.Mutex
 	snf       uint16
@@ -48,9 +49,11 @@ func NewLUSession(conn llc2.Conn, lu, plu byte, odai bool) *LU2Session {
 // NewSSCPLUSession creates a session that carries 3270 data over the SSCP-LU
 // session (USS mode) instead of a bound LU-LU session — letting screens reach a
 // dependent terminal without a BIND. Input arrives on the same SSCP-LU session.
-func NewSSCPLUSession(conn llc2.Conn, lu byte) *LU2Session {
+// model sizes the render buffer (e.g. "IBM-3278-2" = 24x80).
+func NewSSCPLUSession(conn llc2.Conn, lu byte, model string) *LU2Session {
 	s := NewLUSession(conn, lu, 0, false)
 	s.viaSSCPLU = true
+	s.screen = d3270.NewScreen(model)
 	return s
 }
 
@@ -63,19 +66,48 @@ func (s *LU2Session) LU() byte { return s.lu }
 func (s *LU2Session) SendToTerminal(ds []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.snf++
 	if s.viaSSCPLU {
-		// SSCP-LU terminals are base-mode (no extended-attribute negotiation),
-		// so flatten color/extended orders to avoid on-screen garbage.
-		flat := d3270.Flatten(ds)
-		if OnSSCPLUSend != nil {
-			OnSSCPLUSend(ds, flat)
-		}
-		return s.conn.Write(BuildSSCPLUData(s.lu, s.snf, flat))
+		return s.sendSSCPLU(ds)
 	}
+	s.snf++
 	begin := s.firstSend
 	s.firstSend = false
 	return s.conn.Write(BuildFMD(s.lu, s.plu, s.odai, s.snf, ds, begin))
+}
+
+// maxSSCPLUData bounds the 3270 data per PIU to stay under SNA Server's BTU
+// (1493); a continuation Write (no SBA) resumes filling where the prior left off.
+const maxSSCPLUData = 1400
+
+// sendSSCPLU renders the host 3270 write into the session's screen buffer (which
+// correctly applies all positioning/field orders), then re-emits the buffer as a
+// linear character stream — no SBA/SF orders, which the SSCP-LU applet cannot
+// process. Large screens are split across continuation Writes.
+func (s *LU2Session) sendSSCPLU(ds []byte) error {
+	_ = s.screen.Apply(ds)
+	linear := s.screen.Linear()
+	if OnSSCPLUSend != nil {
+		OnSSCPLUSend(ds, linear)
+	}
+	for off := 0; ; {
+		end := off + maxSSCPLUData
+		if end > len(linear) {
+			end = len(linear)
+		}
+		cmd := byte(d3270.CmdW) // continuation: keep filling from current address
+		if off == 0 {
+			cmd = d3270.CmdEW // first chunk erases and starts at 0
+		}
+		out := append([]byte{cmd, 0xC3}, linear[off:end]...) // WCC: reset MDT + restore keyboard
+		s.snf++
+		if err := s.conn.Write(BuildSSCPLUData(s.lu, s.snf, out)); err != nil {
+			return err
+		}
+		off = end
+		if off >= len(linear) {
+			return nil
+		}
+	}
 }
 
 // FromTerminal yields inbound terminal->host 3270 data streams.

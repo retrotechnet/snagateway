@@ -163,6 +163,27 @@ func (s *Screen) wrap(a int) int {
 
 func (s *Screen) inc(a int) int { return s.wrap(a + 1) }
 
+// Linear returns the screen buffer as a row-major sequence of EBCDIC bytes
+// (field-attribute cells rendered as blanks, nulls as blanks), trimmed of
+// trailing blank cells. Emitting this after an Erase/Write reproduces the screen
+// on a terminal that fills the buffer linearly and ignores positioning orders
+// (e.g. the MS SNA Server applet over the SSCP-LU session).
+func (s *Screen) Linear() []byte {
+	out := make([]byte, s.size())
+	last := 0
+	for i := range s.buf {
+		ch := s.buf[i]
+		if s.attrs[i]&0x80 != 0 || ch == 0x00 {
+			ch = 0x40 // EBCDIC space
+		}
+		out[i] = ch
+		if ch != 0x40 {
+			last = i + 1
+		}
+	}
+	return out[:last]
+}
+
 // Render returns the screen as a box-bordered grid of ASCII text. Field-start
 // positions render as spaces (the attribute byte is not a display character).
 func (s *Screen) Render() string {
