@@ -41,6 +41,7 @@ func cmdSNAProbe(args []string) {
 	target := fs.String("target", "", "TN3270 back end host:port to bridge a bound LU session to (e.g. 10.0.0.14:3270)")
 	targetModel := fs.String("target-model", "IBM-3278-2", "TN3270 terminal model for -target")
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
+	showFile := fs.String("show-file", "", "on applet attach, display this text file over the SSCP-LU session (no BIND); repaints on each connect")
 	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
 
@@ -124,7 +125,8 @@ func cmdSNAProbe(args []string) {
 	log.Printf("sna-probe: activation sequence done; observing + auto-acking inbound requests (Ctrl-C to stop)")
 	_ = conn.SetReadDeadline(time.Time{}) // block indefinitely
 	bound := false
-	var session *sna.LU2Session // non-nil once the LU-LU session is bridged
+	var session *sna.LU2Session  // non-nil once the LU-LU session is bridged
+	var fileSess *sna.LU2Session // persistent SSCP-LU session for -show-file (keeps SNF monotonic across reconnects)
 	for {
 		piu, err := pr.Read()
 		if err != nil {
@@ -158,6 +160,28 @@ func cmdSNAProbe(args []string) {
 			continue
 		}
 
+		// Show-file mode: on applet attach (NOTIFY status 03), paint a static
+		// text file over the SSCP-LU session and nothing else (no BIND, no
+		// bridge). The file is re-read and repainted on every attach, so editing
+		// it on the gateway takes effect on the next connect, and reconnects
+		// always redraw. One persistent session keeps the SNF monotonic.
+		if *showFile != "" && isAppReadyNotify(p) {
+			if fileSess == nil {
+				fileSess = sna.NewSSCPLUSession(conn, p.TH.OAF, *targetModel)
+			}
+			ds, err := showFileDatastream(*showFile)
+			if err != nil {
+				log.Printf("sna-probe: show-file %q: %v", *showFile, err)
+				continue
+			}
+			if err := fileSess.SendToTerminal(ds); err != nil {
+				log.Printf("sna-probe: show-file send failed: %v", err)
+			} else {
+				log.Printf("sna-probe: displayed %s on LU %d", *showFile, fileSess.LU())
+			}
+			continue
+		}
+
 		// USS mode: when the applet signals it's ready (NOTIFY status 03), either
 		// bridge a TN3270 host over the SSCP-LU session (-target) or paint a
 		// static test screen — both without a BIND.
@@ -186,7 +210,7 @@ func cmdSNAProbe(args []string) {
 		// Host-initiated session: the LU's logon is an FMD request (FI=0) on the
 		// SSCP-LU session, after the NOTIFY status-03. On it, drive BIND then SDT
 		// to bring up the LU-LU session, then bridge it to the TN3270 back end.
-		if *bind && !*ussTest && !bound && isLogonRequest(p) {
+		if *bind && !*ussTest && *showFile == "" && !bound && isLogonRequest(p) {
 			bound = true
 			lu := p.TH.OAF
 			if *bindSweep {
@@ -352,6 +376,57 @@ func startSSCPLUBridge(conn llc2.Conn, lu byte, target, model string) *sna.LU2Se
 		session.Close()
 	}()
 	return session
+}
+
+// showFileDatastream reads a text file and builds a 3270 Erase/Write data stream
+// that lays it out at model-2 geometry (24 rows x 80 cols): each text line is
+// placed at the start of its row via SBA and translated to EBCDIC. Lines longer
+// than 80 columns are truncated; rows past 24 are dropped (with a warning). The
+// stream is sent over the SSCP-LU session, which renders it into the screen
+// buffer and re-emits pure character-coded text — so it displays cleanly on the
+// applet (which would otherwise show raw orders as garbage).
+func showFileDatastream(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	const rows, cols = 24, 80
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) > rows {
+		log.Printf("sna-probe: show-file: %d lines, showing first %d (screen is %dx%d)", len(lines), rows, rows, cols)
+		lines = lines[:rows]
+	}
+	out := []byte{d3270.CmdEW, 0xC3} // Erase/Write + WCC (reset MDT, unlock keyboard)
+	for row, line := range lines {
+		line = sanitizeLine(line, cols)
+		if line == "" {
+			continue // no order/text needed for a blank row (screen is erased)
+		}
+		b0, b1 := d3270.EncodeAddr(row * cols)
+		out = append(out, d3270.OrderSBA, b0, b1)
+		out = append(out, d3270.A2EBytes(line)...)
+	}
+	return out, nil
+}
+
+// sanitizeLine expands tabs to spaces, replaces non-printable ASCII with spaces
+// (so a stray byte can't be taken for a 3270 order), and truncates to width.
+func sanitizeLine(s string, width int) string {
+	s = strings.ReplaceAll(s, "\t", "    ")
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c > 0x7E {
+			b = append(b, ' ')
+		} else {
+			b = append(b, c)
+		}
+	}
+	if len(b) > width {
+		b = b[:width]
+	}
+	return string(b)
 }
 
 // isAppReadyNotify reports whether a request PIU is a NOTIFY (NS 81 06 20) with

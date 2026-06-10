@@ -1,0 +1,21 @@
+================================================================================
+                      S N A G A T E W A Y   -   WELCOME
+================================================================================
+
+   You are connected through the SNAGATEWAY.
+
+   This screen is served over the SNA SSCP-LU session to your 3270 applet
+   from a Linux gateway on the local network.  No TCP/IP stack is required
+   on this MS-DOS client - the path is:
+
+        3270 applet  ->  SNA Server 4.0  ->  802.2/LLC2  ->  gateway
+
+   Gateway ......: snagateway (Go, standard library only)
+   Display ......: LU2, 3270 model 2, 24 x 80, monochrome
+   Status .......: connection OK
+
+   To change this message, edit  welcome.txt  on the gateway and reconnect.
+
+
+                       *  RETRO RESTORATION PROJECT  *
+================================================================================

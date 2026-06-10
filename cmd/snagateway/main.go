@@ -56,6 +56,7 @@ usage:
   snagateway tn3270     -addr HOST:PORT [-model IBM-3278-2] [-tn3270e] [-follow]
   snagateway llc2-probe -iface ens33 [-connect MAC] [-sap 0x04]
   snagateway sna-probe  -iface ens33 -connect MAC [-lus 2,3,4]
+  snagateway sna-probe  -iface ens33 -connect MAC -show-file welcome.txt
   snagateway run        -config config.json
   snagateway version
 
