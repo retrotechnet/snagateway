@@ -7,8 +7,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"snagateway/internal/bridge"
@@ -98,13 +100,31 @@ func cmdSNAProbe(args []string) {
 			break
 		}
 		if attempt >= *dialTries {
-			log.Fatalf("sna-probe: dial failed after %d attempts: %v (is SNA Server set to Outgoing and calling? check for xid polls)", attempt, err)
+			log.Fatalf("sna-probe: dial failed after %d attempts: %v\n"+
+				"  - is the CRESSIDA connection Active and set to Outgoing Calls?\n"+
+				"  - if it's stuck in [Pending], its link station is stale: stop/start the SNA Service to clear it.\n"+
+				"  (this build sends a clean DISC on Ctrl-C/SIGTERM, which prevents that wedge going forward)", attempt, err)
 		}
 		log.Printf("sna-probe: dial attempt %d/%d: %v — retrying", attempt, *dialTries, err)
 		time.Sleep(1 * time.Second)
 	}
 	defer conn.Close()
 	log.Printf("sna-probe: LINK UP -> %s", conn.RemoteMAC())
+
+	// Clean shutdown: on Ctrl-C / SIGTERM, close the LLC2 link so the kernel
+	// sends DISC and SNA Server tears its link station down. Without this, an
+	// abrupt exit leaves SNA Server's connection wedged in [Pending] and the
+	// next dial is rejected (software caused connection abort) until the SNA
+	// Service is restarted. A short grace period lets the DISC reach the wire.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Printf("sna-probe: signal received — disconnecting LLC2 link cleanly (DISC)")
+		_ = conn.Close()
+		time.Sleep(300 * time.Millisecond)
+		os.Exit(0)
+	}()
 
 	pr := &piuReader{conn: conn} // splits coalesced PIUs out of each LLC2 read
 	wait := time.Duration(*waitSec) * time.Second
