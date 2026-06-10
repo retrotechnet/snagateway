@@ -99,8 +99,8 @@ func DescribeResponse(raw []byte) (summary string, positive bool) {
 		if len(p.RU) >= 5 {
 			code = p.RU[4]
 		}
-		return fmt.Sprintf("NEGATIVE RSP to 0x%02X (DAF=%d OAF=%d) sense=0x%08X",
-			code, p.TH.DAF, p.TH.OAF, sense), false
+		return fmt.Sprintf("NEGATIVE RSP to 0x%02X (DAF=%d OAF=%d) sense=%s",
+			code, p.TH.DAF, p.TH.OAF, DecodeSense(sense)), false
 	}
 	return fmt.Sprintf("POSITIVE RSP to 0x%02X (DAF=%d OAF=%d)",
 		p.RequestCode(), p.TH.DAF, p.TH.OAF), true
