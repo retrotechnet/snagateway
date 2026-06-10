@@ -125,8 +125,11 @@ func cmdSNAProbe(args []string) {
 	log.Printf("sna-probe: activation sequence done; observing + auto-acking inbound requests (Ctrl-C to stop)")
 	_ = conn.SetReadDeadline(time.Time{}) // block indefinitely
 	bound := false
-	var session *sna.LU2Session  // non-nil once the LU-LU session is bridged
-	var fileSess *sna.LU2Session // persistent SSCP-LU session for -show-file (keeps SNF monotonic across reconnects)
+	var session *sna.LU2Session // non-nil once the LU-LU session is bridged
+	// One persistent SSCP-LU session per LU for -show-file, keyed by LU local
+	// address, so each client's banner is addressed to its own LU (correct DAF)
+	// and keeps a monotonic SNF across that LU's reconnects.
+	fileSessions := map[byte]*sna.LU2Session{}
 	for {
 		piu, err := pr.Read()
 		if err != nil {
@@ -166,18 +169,21 @@ func cmdSNAProbe(args []string) {
 		// it on the gateway takes effect on the next connect, and reconnects
 		// always redraw. One persistent session keeps the SNF monotonic.
 		if *showFile != "" && isAppReadyNotify(p) {
-			if fileSess == nil {
-				fileSess = sna.NewSSCPLUSession(conn, p.TH.OAF, *targetModel)
+			lu := p.TH.OAF
+			sess := fileSessions[lu]
+			if sess == nil {
+				sess = sna.NewSSCPLUSession(conn, lu, *targetModel)
+				fileSessions[lu] = sess
 			}
 			ds, err := showFileDatastream(*showFile)
 			if err != nil {
 				log.Printf("sna-probe: show-file %q: %v", *showFile, err)
 				continue
 			}
-			if err := fileSess.SendToTerminal(ds); err != nil {
-				log.Printf("sna-probe: show-file send failed: %v", err)
+			if err := sess.SendToTerminal(ds); err != nil {
+				log.Printf("sna-probe: show-file send failed (LU %d): %v", lu, err)
 			} else {
-				log.Printf("sna-probe: displayed %s on LU %d", *showFile, fileSess.LU())
+				log.Printf("sna-probe: displayed %s on LU %d", *showFile, lu)
 			}
 			continue
 		}
