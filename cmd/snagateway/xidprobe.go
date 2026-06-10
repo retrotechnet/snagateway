@@ -59,6 +59,9 @@ func cmdXIDProbe(args []string) {
 		if !ok || !bytes.Equal(f.Src, mac) {
 			continue // not an 802.3 LLC frame from SNA Server
 		}
+		if f.DSAP != sap && f.DSAP != 0x00 {
+			continue // ignore NetBIOS (0xE0) and other non-SNA SAPs
+		}
 		log.Printf("xid-probe: <- dsap=%02X ssap=%02X ctrl=%02X [%s] info=% X",
 			f.DSAP, f.SSAP, f.Control, xid.ControlName(f.Control), f.Info)
 
