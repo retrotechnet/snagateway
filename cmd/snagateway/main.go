@@ -38,8 +38,6 @@ func main() {
 		cmdLLC2Probe(os.Args[2:])
 	case "sna-probe":
 		cmdSNAProbe(os.Args[2:])
-	case "xid-probe":
-		cmdXIDProbe(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println("snagateway", version)
 	case "help", "-h", "--help":
@@ -58,7 +56,6 @@ usage:
   snagateway tn3270     -addr HOST:PORT [-model IBM-3278-2] [-tn3270e] [-follow]
   snagateway llc2-probe -iface ens33 [-connect MAC] [-sap 0x04]
   snagateway sna-probe  -iface ens33 -connect MAC [-lus 2,3,4]
-  snagateway xid-probe  -iface ens33 -connect MAC [-xid3 HEX]
   snagateway run        -config config.json
   snagateway version
 
