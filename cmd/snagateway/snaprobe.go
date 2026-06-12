@@ -44,6 +44,7 @@ func cmdSNAProbe(args []string) {
 	targetModel := fs.String("target-model", "IBM-3278-2", "TN3270 terminal model for -target")
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
 	showFile := fs.String("show-file", "", "on applet attach, display this text file over the SSCP-LU session (no BIND); repaints on each connect")
+	echoTest := fs.Bool("echo-test", false, "diagnostic: prompt over the SSCP-LU session and echo typed input back, to verify the interactive input loop works after our display")
 	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
 
@@ -183,6 +184,37 @@ func cmdSNAProbe(args []string) {
 			continue
 		}
 
+		// Echo-test mode: the de-risking spike for the interactive menu. On applet
+		// attach, prompt for a line; on each line typed, decode the EBCDIC input and
+		// echo it back. If the typed text round-trips on the applet (not just an
+		// empty Enter), the SSCP-LU session supports the display+input loop a menu
+		// needs. Reuses the per-LU SSCP-LU session cache.
+		if *echoTest {
+			lu := p.TH.OAF
+			if isAppReadyNotify(p) {
+				sess := fileSessions[lu]
+				if sess == nil {
+					sess = sna.NewSSCPLUSession(conn, lu, *targetModel)
+					fileSessions[lu] = sess
+				}
+				_ = sess.SendToTerminal(echoScreen("SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:"))
+				log.Printf("sna-probe: echo-test: prompted LU %d", lu)
+				continue
+			}
+			if isLogonRequest(p) { // char-coded input typed at the applet
+				text := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
+				log.Printf("sna-probe: echo-test: LU %d typed %d bytes: raw=% X decoded=%q", lu, len(p.RU), p.RU, text)
+				sess := fileSessions[lu]
+				if sess == nil {
+					sess = sna.NewSSCPLUSession(conn, lu, *targetModel)
+					fileSessions[lu] = sess
+				}
+				_ = sess.SendToTerminal(echoScreen("YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:"))
+				continue
+			}
+			continue
+		}
+
 		// Show-file mode: on applet attach (NOTIFY status 03), paint a static
 		// text file over the SSCP-LU session and nothing else (no BIND, no
 		// bridge). The file is re-read and repainted on every attach, so editing
@@ -236,7 +268,7 @@ func cmdSNAProbe(args []string) {
 		// Host-initiated session: the LU's logon is an FMD request (FI=0) on the
 		// SSCP-LU session, after the NOTIFY status-03. On it, drive BIND then SDT
 		// to bring up the LU-LU session, then bridge it to the TN3270 back end.
-		if *bind && !*ussTest && *showFile == "" && !bound && isLogonRequest(p) {
+		if *bind && !*ussTest && *showFile == "" && !*echoTest && !bound && isLogonRequest(p) {
 			bound = true
 			lu := p.TH.OAF
 			if *bindSweep {
@@ -435,6 +467,22 @@ func showFileDatastream(path string) ([]byte, error) {
 		out = append(out, d3270.A2EBytes(line)...)
 	}
 	return out, nil
+}
+
+// echoScreen builds a 3270 Erase/Write data stream that places each given line at
+// the start of its own row (model-2 geometry), for the echo-test diagnostic. Sent
+// over the SSCP-LU session, which renders it to clean character-coded text.
+func echoScreen(lines ...string) []byte {
+	out := []byte{d3270.CmdEW, 0xC3} // Erase/Write + WCC (reset MDT, unlock keyboard)
+	for row, line := range lines {
+		if line == "" {
+			continue
+		}
+		b0, b1 := d3270.EncodeAddr(row * 80)
+		out = append(out, d3270.OrderSBA, b0, b1)
+		out = append(out, d3270.A2EBytes(line)...)
+	}
+	return out
 }
 
 // sanitizeLine expands tabs to spaces, replaces non-printable ASCII with spaces
