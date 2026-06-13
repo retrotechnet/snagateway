@@ -191,25 +191,20 @@ func cmdSNAProbe(args []string) {
 		// needs. Reuses the per-LU SSCP-LU session cache.
 		if *echoTest {
 			lu := p.TH.OAF
+			// Send the screen RAW (EW command + SBA + text), NOT linearized, so the
+			// Erase/Write clears the applet between messages. (The linearizer strips
+			// the EW, which is why successive screens were piling up.)
 			if isAppReadyNotify(p) {
-				sess := fileSessions[lu]
-				if sess == nil {
-					sess = sna.NewSSCPLUSession(conn, lu, *targetModel)
-					fileSessions[lu] = sess
-				}
-				_ = sess.SendToTerminal(echoScreen("SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:"))
-				log.Printf("sna-probe: echo-test: prompted LU %d", lu)
+				snf++
+				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, echoScreen("SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:")))
+				log.Printf("sna-probe: echo-test: prompted LU %d (raw EW)", lu)
 				continue
 			}
 			if isLogonRequest(p) { // char-coded input typed at the applet
 				text := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
 				log.Printf("sna-probe: echo-test: LU %d typed %d bytes: raw=% X decoded=%q", lu, len(p.RU), p.RU, text)
-				sess := fileSessions[lu]
-				if sess == nil {
-					sess = sna.NewSSCPLUSession(conn, lu, *targetModel)
-					fileSessions[lu] = sess
-				}
-				_ = sess.SendToTerminal(echoScreen("YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:"))
+				snf++
+				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, echoScreen("YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:")))
 				continue
 			}
 			continue
