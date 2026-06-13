@@ -1,21 +1,24 @@
-================================================================================
+===============================================================================
       RetroTechNet - SNA Gateway - Mainframe Connection Information Panel       
-================================================================================
+===============================================================================
 
    You are connected through the RetroTechNet SNAGATEWAY.  This information
    panel will provide information on the Mainframe systems on the RetroTechNet
    network.  All connections are required to be established through the IBM
-   Classroom LAN Administration Host System or Windows NT Terminal Server
-   environment.
+   Classroom LAN Administration System or Windows NT Terminal Server system.
 
-   1. VM/370 - Virtual Machine 370 - MVS 3.8j TK4- Development Environment
-   2. VM/ESA - Virtual Machine / Enterprise Systems Architecture - Development
-   3. z/VM - z/Virtual Machine - OS/390 CUSTOMPAC and VM/VSE - Production
-   4. OS/390 - IBM OS/390 - RetroTechNet 
-   
-
-
-
-
+   +---------------------------+----------------------------------------------+
+   | System                    | Environment                                  |
+   +---------------------------+----------------------------------------------+
+   | IBM VM/370                | Virtual Machines - OSVS2 TK4-                |
+   | IBM VM/ESA                | Virtual Machines - OS/390, VM/VSE, MUSIC/SP  |
+   | IBM z/VM                  | Virtual Machines - OS/390, VM/VSE            |
+   | IBM OS/390                | Institution Management System                |
+   | MUSIC/SP                  | ICLAS Host Gateway                           |
+   | BRICKS                    | Development - Transaction Processing         |
+   | IBM MVS 3.8j OS/VS2 TK5-  | Student Mainframe Access                     |
+   | MVS/CE                    | Student Mainframe Access                     |
+   | Forum3270                 | Online Forums and Collaboration              |
+   +---------------------------+----------------------------------------------+
 
 ================================================================================
