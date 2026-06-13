@@ -45,6 +45,7 @@ func cmdSNAProbe(args []string) {
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
 	showFile := fs.String("show-file", "", "on applet attach, display this text file over the SSCP-LU session (no BIND); repaints on each connect")
 	echoTest := fs.Bool("echo-test", false, "diagnostic: prompt over the SSCP-LU session and echo typed input back, to verify the interactive input loop works after our display")
+	clearHex := fs.String("clear", "0C", "echo-test: hex bytes prepended to each screen to clear/home the applet (0C=FF, 15=NL, empty=none); the rest is clean character-coded text")
 	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
 
@@ -65,6 +66,7 @@ func cmdSNAProbe(args []string) {
 	if *bindHex != "" {
 		bindImage = mustHex(*bindHex)
 	}
+	clearBytes := mustHex(*clearHex) // echo-test screen-clear prefix (e.g. FF)
 
 	if *iface == "" || *connect == "" {
 		fmt.Fprintln(os.Stderr, "sna-probe: -iface and -connect are required")
@@ -191,20 +193,20 @@ func cmdSNAProbe(args []string) {
 		// needs. Reuses the per-LU SSCP-LU session cache.
 		if *echoTest {
 			lu := p.TH.OAF
-			// Send the screen RAW (EW command + SBA + text), NOT linearized, so the
-			// Erase/Write clears the applet between messages. (The linearizer strips
-			// the EW, which is why successive screens were piling up.)
+			// Send clean character-coded text (linearized, no 3270 command/orders —
+			// those render as garbage here), prefixed with clearBytes (e.g. FF) to
+			// test what clears/homes the applet between messages.
 			if isAppReadyNotify(p) {
 				snf++
-				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, echoScreen("SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:")))
-				log.Printf("sna-probe: echo-test: prompted LU %d (raw EW)", lu)
+				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, charScreen(clearBytes, *targetModel, "SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:")))
+				log.Printf("sna-probe: echo-test: prompted LU %d (clear=% X)", lu, clearBytes)
 				continue
 			}
 			if isLogonRequest(p) { // char-coded input typed at the applet
 				text := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
 				log.Printf("sna-probe: echo-test: LU %d typed %d bytes: raw=% X decoded=%q", lu, len(p.RU), p.RU, text)
 				snf++
-				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, echoScreen("YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:")))
+				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, charScreen(clearBytes, *targetModel, "YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:")))
 				continue
 			}
 			continue
@@ -462,6 +464,17 @@ func showFileDatastream(path string) ([]byte, error) {
 		out = append(out, d3270.A2EBytes(line)...)
 	}
 	return out, nil
+}
+
+// charScreen builds clean character-coded SSCP-LU display data: it lays the lines
+// out in a 3270 screen buffer (which applies the positioning), then linearizes to
+// pure EBCDIC text with no command or order bytes (those render as garbage on the
+// applet's SSCP-LU session). clear is prepended unchanged — a candidate clear/home
+// control (e.g. FF=0x0C) we're probing for.
+func charScreen(clear []byte, model string, lines ...string) []byte {
+	scr := d3270.NewScreen(model)
+	_ = scr.Apply(echoScreen(lines...))
+	return append(append([]byte{}, clear...), scr.Linear()...)
 }
 
 // echoScreen builds a 3270 Erase/Write data stream that places each given line at
