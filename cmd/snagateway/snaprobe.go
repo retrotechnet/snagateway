@@ -231,14 +231,11 @@ func cmdSNAProbe(args []string) {
 					sendMenu(sess.Greeting())
 					break
 				}
-				line := strings.TrimSpace(d3270.E2AString(p.RU))
-				// Loop guard: a real command/login is short. If the applet echoes its
-				// whole screen back (which can happen after a large write), the
-				// despaced text is long — ignore it rather than feed it back and spiral.
-				if len(strings.ReplaceAll(line, " ", "")) > 16 {
-					log.Printf("sna-probe: menu: LU %d ignoring %d-byte screen echo (not a command)", lu, len(line))
-					break
-				}
+				// Once the display scrolls, the applet returns its whole screen buffer
+				// on Enter (and locks the keyboard waiting for us). Extract the user's
+				// actual input from it, then always respond — which clears that lock.
+				line := extractInput(d3270.E2AString(p.RU))
+				log.Printf("sna-probe: menu: LU %d input %q", lu, line)
 				sendMenu(sess.Input(line))
 			}
 			continue
@@ -523,6 +520,24 @@ func showFileDatastream(path string) ([]byte, error) {
 		out = append(out, d3270.A2EBytes(line)...)
 	}
 	return out, nil
+}
+
+// extractInput recovers the user's typed command from an inbound SSCP-LU line.
+// While the display fits one screen the applet returns just what was typed; once
+// it scrolls, Enter returns the whole screen buffer instead. In that case the
+// user's input is the text after the last prompt colon (our prompts all end in
+// ":"), and it's a single token — so take the last token after the last colon.
+// A short clean input (no colon) passes through unchanged. Empty (a bare Enter)
+// stays empty so the file viewer advances.
+func extractInput(s string) string {
+	s = strings.TrimRight(s, " \x00")
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		s = s[i+1:]
+	}
+	if f := strings.Fields(s); len(f) > 0 {
+		return f[len(f)-1]
+	}
+	return ""
 }
 
 // echoSend writes one echo-test screen in scrolling line-mode (the proven display
