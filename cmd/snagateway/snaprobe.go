@@ -47,6 +47,7 @@ func cmdSNAProbe(args []string) {
 	echoTest := fs.Bool("echo-test", false, "diagnostic: prompt over the SSCP-LU session and echo typed input back, to verify the interactive input loop works after our display")
 	clearHex := fs.String("clear", "0C", "echo-test: hex bytes prepended to each screen to clear/home the applet (0C=FF, 15=NL, empty=none); the rest is clean character-coded text")
 	fmtTest := fs.Bool("fmt", false, "echo-test: send a real 3270 datastream (EW+SBA) with the RH format-indicator set, to test if the applet processes 3270 orders on the SSCP-LU session")
+	pageTest := fs.Bool("page", false, "echo-test: send a full 24-line page (NL-separated) so the previous page scrolls out of the applet's 24-line window — an effective full-screen clear")
 	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
 
@@ -199,15 +200,15 @@ func cmdSNAProbe(args []string) {
 			// test what clears/homes the applet between messages.
 			if isAppReadyNotify(p) {
 				snf++
-				echoSend(conn, lu, snf, *fmtTest, clearBytes, *targetModel, "SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:")
-				log.Printf("sna-probe: echo-test: prompted LU %d (fmt=%v clear=% X)", lu, *fmtTest, clearBytes)
+				echoSend(conn, lu, snf, *pageTest, *fmtTest, clearBytes, *targetModel, "SNAGATEWAY  --  ECHO TEST", "", "TYPE A LINE, THEN PRESS ENTER:")
+				log.Printf("sna-probe: echo-test: prompted LU %d (page=%v fmt=%v clear=% X)", lu, *pageTest, *fmtTest, clearBytes)
 				continue
 			}
 			if isLogonRequest(p) { // char-coded input typed at the applet
 				text := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
 				log.Printf("sna-probe: echo-test: LU %d typed %d bytes: raw=% X decoded=%q", lu, len(p.RU), p.RU, text)
 				snf++
-				echoSend(conn, lu, snf, *fmtTest, clearBytes, *targetModel, "YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:")
+				echoSend(conn, lu, snf, *pageTest, *fmtTest, clearBytes, *targetModel, "YOU TYPED:", "    ["+text+"]", "", "TYPE ANOTHER LINE, THEN PRESS ENTER:")
 				continue
 			}
 			continue
@@ -467,20 +468,49 @@ func showFileDatastream(path string) ([]byte, error) {
 	return out, nil
 }
 
-// echoSend writes one echo-test screen. In fmt mode it sends a real 3270
-// datastream (EW + SBA + text) with the RH format-indicator set, to test whether
-// the applet processes 3270 orders on the SSCP-LU session. Otherwise it sends
-// clean character-coded text (no orders) prefixed with the clear-probe bytes.
-func echoSend(conn llc2.Conn, lu byte, snf uint16, fmt bool, clear []byte, model string, lines ...string) {
+// echoSend writes one echo-test screen. page mode sends a full 24-line page that
+// scrolls the previous page out of the applet's window (effective clear). fmt mode
+// sends a real 3270 datastream with the RH format-indicator set (tests 3270-order
+// processing). Otherwise it sends clean character-coded text prefixed with the
+// clear-probe bytes.
+func echoSend(conn llc2.Conn, lu byte, snf uint16, page, fmt bool, clear []byte, model string, lines ...string) {
 	var piu []byte
-	if fmt {
+	switch {
+	case page:
+		piu = sna.BuildSSCPLUData(lu, snf, pageScreen(lines...))
+	case fmt:
 		th := sna.TH{MPF: sna.MPFWhole, DAF: lu, OAF: 0x00, SNF: snf}
 		rh := sna.RH{Category: sna.CategoryFMD, FI: true, BCI: true, ECI: true, DR1: true}
 		piu = sna.BuildPIU(th, rh, echoScreen(lines...))
-	} else {
+	default:
 		piu = sna.BuildSSCPLUData(lu, snf, charScreen(clear, model, lines...))
 	}
 	_ = conn.Write(piu)
+}
+
+// pageScreen builds a full 24-line character-coded page: a leading NL (0x15) ends
+// any partial line from prior input, then 24 lines (padded with blanks) separated
+// by NL, each capped at 79 columns so the applet's 80-column auto-wrap doesn't add
+// extra lines. Because the applet only shows the last 24 lines, a full 24-line
+// page pushes all previous content out of view — a clean full-screen clear using
+// only the NL behavior the applet honors.
+func pageScreen(lines ...string) []byte {
+	const rows = 24
+	out := []byte{0x15} // leading NL: terminate any partial line (e.g. the user's input)
+	for i := 0; i < rows; i++ {
+		if i > 0 {
+			out = append(out, 0x15)
+		}
+		var line string
+		if i < len(lines) {
+			line = lines[i]
+		}
+		if len(line) > 79 {
+			line = line[:79]
+		}
+		out = append(out, d3270.A2EBytes(line)...)
+	}
+	return out
 }
 
 // charScreen builds clean character-coded SSCP-LU display data: it lays the lines
