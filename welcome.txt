@@ -1,21 +1,21 @@
 ================================================================================
-                      S N A G A T E W A Y   -   WELCOME
+      RetroTechNet - SNA Gateway - Mainframe Connection Information Panel       
 ================================================================================
 
-   You are connected through the SNAGATEWAY.
+   You are connected through the RetroTechNet SNAGATEWAY.  This information
+   panel will provide information on the Mainframe systems on the RetroTechNet
+   network.  All connections are required to be established through the IBM
+   Classroom LAN Administration Host System or Windows NT Terminal Server
+   environment.
 
-   This screen is served over the SNA SSCP-LU session to your 3270 applet
-   from a Linux gateway on the local network.  No TCP/IP stack is required
-   on this MS-DOS client - the path is:
-
-        3270 applet  ->  SNA Server 4.0  ->  802.2/LLC2  ->  gateway
-
-   Gateway ......: snagateway (Go, standard library only)
-   Display ......: LU2, 3270 model 2, 24 x 80, monochrome
-   Status .......: connection OK
-
-   To change this message, edit  welcome.txt  on the gateway and reconnect.
+   1. VM/370 - Virtual Machine 370 - MVS 3.8j TK4- Development Environment
+   2. VM/ESA - Virtual Machine / Enterprise Systems Architecture - Development
+   3. z/VM - z/Virtual Machine - OS/390 CUSTOMPAC and VM/VSE - Production
+   4. OS/390 - IBM OS/390 - RetroTechNet 
+   
 
 
-                       *  RETRO RESTORATION PROJECT  *
+
+
+
 ================================================================================
