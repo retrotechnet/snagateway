@@ -10,7 +10,7 @@
    +---------------------------+----------------------------------------------+
    | System                    | Environment                                  |
    +---------------------------+----------------------------------------------+
-   | IBM VM/370                | Virtual Machines - OSVS2 TK4-                |
+   | IBM VM/370                | Virtual Machines - OS/VS2 TK4-               |
    | IBM VM/ESA                | Virtual Machines - OS/390, VM/VSE, MUSIC/SP  |
    | IBM z/VM                  | Virtual Machines - OS/390, VM/VSE            |
    | IBM OS/390                | Institution Management System                |
