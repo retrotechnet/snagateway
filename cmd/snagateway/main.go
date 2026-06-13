@@ -57,6 +57,7 @@ usage:
   snagateway llc2-probe -iface ens33 [-connect MAC] [-sap 0x04]
   snagateway sna-probe  -iface ens33 -connect MAC [-lus 2,3,4]
   snagateway sna-probe  -iface ens33 -connect MAC -show-file welcome.txt
+  snagateway sna-probe  -iface ens33 -connect MAC -lus 2,3,4 -menu examples/menu/app.json
   snagateway run        -config config.json
   snagateway version
 

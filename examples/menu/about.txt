@@ -1,0 +1,21 @@
+ABOUT THIS GATEWAY
+------------------
+
+SNAGATEWAY is a small Linux gateway (written in Go, standard library
+only) for a retro restoration project. It presents an interactive,
+text-based "mainframe" experience to MS-DOS clients running the
+Microsoft SNA Server 3270 applet on a NetWare network.
+
+How it works:
+
+  - The gateway impersonates a host toward Microsoft SNA Server 4.0,
+    activating the PU and the display LUs (ACTPU / ACTLU).
+  - Screens and keystrokes travel on the SSCP-LU session in
+    character-coded form - no LU-LU BIND is required.
+  - This menu system runs entirely on the gateway: login, menus,
+    submenus, and a paged document viewer.
+
+It is a faithful line-mode terminal experience, in the spirit of the
+classic TSO, VM/CMS, and USS command sessions.
+
+Press ENTER to return to the menu.

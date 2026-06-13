@@ -1,0 +1,19 @@
+RELEASE NOTES
+-------------
+
+Gateway, menu edition:
+
+  * Interactive USS menu system over the SSCP-LU session (no BIND).
+  * Per-user login with starting menus.
+  * Multi-level menus and submenus, with BACK and LOG OFF.
+  * Paged text-file viewer.
+  * Multiple concurrent terminals, one per LU.
+
+Known limitations:
+
+  * Display is monochrome line-mode (scrolling), not full-screen
+    field mode - the SSCP-LU session is character-coded only.
+  * Passwords are shown as typed (no field masking) and are stored
+    in plaintext in the config; intended for an isolated network.
+
+Press ENTER to return to the menu.

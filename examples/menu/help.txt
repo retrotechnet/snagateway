@@ -1,0 +1,23 @@
+HELP
+----
+
+Using this system:
+
+  * At the LOGON screen, type your USERID and press ENTER, then type
+    your PASSWORD and press ENTER.
+
+  * At a MENU, type the number or letter shown beside an item and
+    press ENTER to select it.
+
+  * While reading a document, press ENTER to see the next page, or to
+    return to the menu after the last page.
+
+  * At any menu, type  B  to go BACK to the previous menu, or  X  to
+    LOG OFF and return to the logon screen.
+
+Sample logins for this demo:
+
+    USERID: GUEST   PASSWORD: GUEST
+    USERID: SYSOP   PASSWORD: SYSOP
+
+Press ENTER to return to the menu.

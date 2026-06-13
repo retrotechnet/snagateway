@@ -16,6 +16,7 @@ import (
 	"snagateway/internal/bridge"
 	"snagateway/internal/d3270"
 	"snagateway/internal/llc2"
+	"snagateway/internal/menu"
 	"snagateway/internal/sna"
 	"snagateway/internal/tn3270"
 )
@@ -45,6 +46,7 @@ func cmdSNAProbe(args []string) {
 	ussTest := fs.Bool("uss-test", false, "send a test 3270 screen over the SSCP-LU session (no BIND) to check the display path")
 	showFile := fs.String("show-file", "", "on applet attach, display this text file over the SSCP-LU session (no BIND); repaints on each connect")
 	echoTest := fs.Bool("echo-test", false, "diagnostic: prompt over the SSCP-LU session and echo typed input back (scrolling line-mode), to verify the interactive input loop")
+	menuFile := fs.String("menu", "", "run the interactive USS menu system from this JSON config (login + multi-level menus + paged file viewer, no BIND)")
 	dump := fs.Bool("dump", false, "hex-dump the SSCP-LU 3270 data streams (original from host + flattened) for debugging")
 	fs.Parse(args)
 
@@ -64,6 +66,16 @@ func cmdSNAProbe(args []string) {
 	bindImage := sna.DefaultBind
 	if *bindHex != "" {
 		bindImage = mustHex(*bindHex)
+	}
+
+	var menuCfg *menu.Config
+	if *menuFile != "" {
+		mc, err := menu.Load(*menuFile)
+		if err != nil {
+			log.Fatalf("sna-probe: menu config: %v", err)
+		}
+		menuCfg = mc
+		log.Printf("sna-probe: menu system loaded from %s (%d users, %d menus)", *menuFile, len(mc.Users), len(mc.Menus))
 	}
 
 	if *iface == "" || *connect == "" {
@@ -151,6 +163,8 @@ func cmdSNAProbe(args []string) {
 	// address, so each client's banner is addressed to its own LU (correct DAF)
 	// and keeps a monotonic SNF across that LU's reconnects.
 	fileSessions := map[byte]*sna.LU2Session{}
+	// Per-LU menu state machine for -menu, keyed by LU local address.
+	menuSessions := map[byte]*menu.Session{}
 	for {
 		piu, err := pr.Read()
 		if err != nil {
@@ -181,6 +195,39 @@ func cmdSNAProbe(args []string) {
 			log.Printf("sna-probe: LU %d client disconnected — closing bridge", p.TH.OAF)
 			session.Close()
 			session = nil
+			continue
+		}
+
+		// Menu mode: the interactive USS menu system over the SSCP-LU session. On
+		// applet attach, start a session and send the login screen; on each typed
+		// line, advance the state machine and send the next screen; on disconnect,
+		// drop the session. Rendered in scrolling line-mode (charScreen).
+		if menuCfg != nil {
+			lu := p.TH.OAF
+			sendMenu := func(lines []string) {
+				snf++
+				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, charScreen(*targetModel, lines...)))
+			}
+			switch {
+			case isAppIdleNotify(p):
+				delete(menuSessions, lu)
+				log.Printf("sna-probe: menu: LU %d disconnected", lu)
+			case isAppReadyNotify(p):
+				sess := menu.NewSession(menuCfg)
+				menuSessions[lu] = sess
+				sendMenu(sess.Greeting())
+				log.Printf("sna-probe: menu: LU %d connected — login screen sent", lu)
+			case isLogonRequest(p): // a typed line from the applet
+				sess := menuSessions[lu]
+				if sess == nil { // session lost (e.g. gateway restarted) — restart at login
+					sess = menu.NewSession(menuCfg)
+					menuSessions[lu] = sess
+					sendMenu(sess.Greeting())
+					break
+				}
+				line := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
+				sendMenu(sess.Input(line))
+			}
 			continue
 		}
 
@@ -264,7 +311,7 @@ func cmdSNAProbe(args []string) {
 		// Host-initiated session: the LU's logon is an FMD request (FI=0) on the
 		// SSCP-LU session, after the NOTIFY status-03. On it, drive BIND then SDT
 		// to bring up the LU-LU session, then bridge it to the TN3270 back end.
-		if *bind && !*ussTest && *showFile == "" && !*echoTest && !bound && isLogonRequest(p) {
+		if *bind && !*ussTest && *showFile == "" && !*echoTest && *menuFile == "" && !bound && isLogonRequest(p) {
 			bound = true
 			lu := p.TH.OAF
 			if *bindSweep {

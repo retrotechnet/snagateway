@@ -1,0 +1,16 @@
+OPERATOR NOTES  (SYSOP)
+-----------------------
+
+This document is only reachable from the SYSOP menu, to show that
+different users can be given different starting menus and content.
+
+Operator reminders:
+
+  * Set the CRESSIDA connection to activate on server startup so the
+    gateway can dial in after a reboot.
+  * Define one display LU per simultaneous client, and pass them all
+    to the gateway with -lus.
+  * Stop the gateway with Ctrl-C (never kill -9) so the LLC2 link
+    disconnects cleanly and SNA Server does not wedge.
+
+Press ENTER to return to the menu.

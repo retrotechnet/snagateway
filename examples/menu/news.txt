@@ -1,0 +1,18 @@
+SYSTEM NEWS
+-----------
+
+Welcome to the SNAGATEWAY system news service.
+
+This screen is served to your MS-DOS 3270 applet over an SNA SSCP-LU
+session from a Linux gateway on the local network. No TCP/IP stack is
+required on the client - the path is:
+
+    3270 applet  ->  SNA Server 4.0  ->  802.2/LLC2  ->  gateway
+
+Headlines:
+
+  * The retro restoration network is online.
+  * Multiple terminals can log in at once, each on its own LU.
+  * Text documents are available from the Documents Library.
+
+Press ENTER to return to the menu.

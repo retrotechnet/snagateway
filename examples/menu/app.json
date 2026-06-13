@@ -1,0 +1,32 @@
+{
+  "title": "==============  S N A G A T E W A Y   S Y S T E M  ==============",
+  "users": [
+    { "username": "GUEST", "password": "GUEST", "menu": "main" },
+    { "username": "SYSOP", "password": "SYSOP", "menu": "sysop" }
+  ],
+  "menus": {
+    "main": {
+      "title": "MAIN MENU",
+      "items": [
+        { "key": "1", "label": "System News",       "file": "news.txt" },
+        { "key": "2", "label": "About This Gateway", "file": "about.txt" },
+        { "key": "3", "label": "Documents",          "menu": "docs" },
+        { "key": "4", "label": "Help",               "file": "help.txt" }
+      ]
+    },
+    "docs": {
+      "title": "DOCUMENTS LIBRARY",
+      "items": [
+        { "key": "1", "label": "Gateway README",     "file": "readme.txt" },
+        { "key": "2", "label": "Release Notes",      "file": "notes.txt" }
+      ]
+    },
+    "sysop": {
+      "title": "SYSOP MENU",
+      "items": [
+        { "key": "1", "label": "System News",        "file": "news.txt" },
+        { "key": "2", "label": "Operator Notes",     "file": "sysop.txt" }
+      ]
+    }
+  }
+}
