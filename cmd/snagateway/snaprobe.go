@@ -206,12 +206,18 @@ func cmdSNAProbe(args []string) {
 			lu := p.TH.OAF
 			sendMenu := func(lines []string) {
 				snf++
-				_ = conn.Write(sna.BuildSSCPLUData(lu, snf, charScreen(*targetModel, lines...)))
+				// Segment large screens (e.g. full text pages) so an oversized PIU
+				// doesn't overflow the BTU and drop the link.
+				for _, piu := range sna.BuildSSCPLUSegments(lu, snf, charScreen(*targetModel, lines...)) {
+					_ = conn.Write(piu)
+				}
 			}
 			switch {
 			case isAppIdleNotify(p):
-				delete(menuSessions, lu)
-				log.Printf("sna-probe: menu: LU %d disconnected", lu)
+				if _, ok := menuSessions[lu]; ok {
+					delete(menuSessions, lu)
+					log.Printf("sna-probe: menu: LU %d disconnected", lu)
+				}
 			case isAppReadyNotify(p):
 				sess := menu.NewSession(menuCfg)
 				menuSessions[lu] = sess

@@ -154,6 +154,38 @@ func BuildSSCPLUData(lu byte, snf uint16, data []byte) []byte {
 	return BuildPIU(th, rh, data)
 }
 
+// BuildSSCPLUSegments builds one or more PIUs carrying char-coded display data on
+// the SSCP-LU session (DAF=lu, OAF=0), SNA-segmenting across PIUs — one shared
+// SNF, FID2 mapping field first/middle/last — when the data exceeds one BTU, so
+// SNA Server reassembles it into a single message. Use this instead of
+// BuildSSCPLUData for screens that may exceed ~1480 bytes (e.g. full text pages);
+// an oversized single PIU overflows the BTU and drops the whole link.
+func BuildSSCPLUSegments(lu byte, snf uint16, data []byte) [][]byte {
+	rh := RH{Category: CategoryFMD, BCI: true, ECI: true, DR1: true}.Bytes()
+	biu := append(append([]byte{}, rh...), data...)
+	if len(biu) <= maxSegPayload {
+		th := TH{MPF: MPFWhole, DAF: lu, OAF: 0x00, SNF: snf}
+		return [][]byte{append(th.Bytes(), biu...)}
+	}
+	var out [][]byte
+	for off := 0; off < len(biu); {
+		end := off + maxSegPayload
+		if end > len(biu) {
+			end = len(biu)
+		}
+		mpf := byte(MPFMiddle)
+		if off == 0 {
+			mpf = MPFFirst
+		} else if end >= len(biu) {
+			mpf = MPFLast
+		}
+		th := TH{MPF: mpf, DAF: lu, OAF: 0x00, SNF: snf}
+		out = append(out, append(th.Bytes(), biu[off:end]...))
+		off = end
+	}
+	return out
+}
+
 // BuildFMD builds an FMD PIU carrying a 3270 data stream on the LU-LU session
 // (normal flow). beginBracket sets BBI for the first RU of a bracket; CDI is set
 // so the terminal may send its response.
