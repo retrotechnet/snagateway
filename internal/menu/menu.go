@@ -15,10 +15,13 @@ import (
 )
 
 // maxWidth is the usable display width (one column short of 80 so the applet's
-// auto-wrap never adds a line). viewLines is the text-file lines shown per page.
+// auto-wrap never adds a line). viewLines is the text-file lines shown per page —
+// kept small so a page (plus footer) stays well under the BTU and never has to be
+// SNA-segmented: a large/segmented screen makes the applet echo its whole buffer
+// back on the next Enter instead of just the typed input.
 const (
 	maxWidth  = 79
-	viewLines = 20
+	viewLines = 12
 )
 
 // Config is the whole menu system, loaded from a JSON file.

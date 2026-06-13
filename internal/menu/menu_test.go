@@ -93,17 +93,25 @@ func TestFilePagingAndLogoff(t *testing.T) {
 	s := NewSession(testConfig(t))
 	login(t, s)
 
-	// Open the file: first page should offer MORE.
+	// Open the file: first page should offer MORE (the test file spans >1 page).
 	got := joined(s.Input("1"))
 	if !strings.Contains(got, "Line one.") || !strings.Contains(got, "PRESS ENTER FOR MORE") {
 		t.Fatalf("file view page 1 wrong:\n%s", got)
 	}
-	// Enter advances to the last page (END prompt).
-	got = joined(s.Input(""))
-	if !strings.Contains(got, "PRESS ENTER TO RETURN") {
-		t.Fatalf("file view last page should prompt to return:\n%s", got)
+	// Page through with Enter until the final page prompts to return.
+	for i := 0; ; i++ {
+		got = joined(s.Input(""))
+		if strings.Contains(got, "PRESS ENTER TO RETURN") {
+			break
+		}
+		if !strings.Contains(got, "PRESS ENTER FOR MORE") {
+			t.Fatalf("intermediate page should offer MORE or RETURN:\n%s", got)
+		}
+		if i > 50 {
+			t.Fatal("paging did not reach the end")
+		}
 	}
-	// Enter again returns to the menu.
+	// Enter on the last page returns to the menu.
 	got = joined(s.Input(""))
 	if !strings.Contains(got, "MAIN MENU") {
 		t.Fatalf("after last page, Enter should return to menu:\n%s", got)

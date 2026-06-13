@@ -231,7 +231,14 @@ func cmdSNAProbe(args []string) {
 					sendMenu(sess.Greeting())
 					break
 				}
-				line := strings.TrimRight(d3270.E2AString(p.RU), " \x00")
+				line := strings.TrimSpace(d3270.E2AString(p.RU))
+				// Loop guard: a real command/login is short. If the applet echoes its
+				// whole screen back (which can happen after a large write), the
+				// despaced text is long — ignore it rather than feed it back and spiral.
+				if len(strings.ReplaceAll(line, " ", "")) > 16 {
+					log.Printf("sna-probe: menu: LU %d ignoring %d-byte screen echo (not a command)", lu, len(line))
+					break
+				}
 				sendMenu(sess.Input(line))
 			}
 			continue
