@@ -152,7 +152,7 @@ func cmdSNAProbe(args []string) {
 	for _, lu := range lus {
 		snf++
 		send(conn, fmt.Sprintf("ACTLU(LU %d)", lu), sna.BuildActLU(lu, snf, actluRU))
-		recv(pr, wait)
+		recvAck(conn, pr, wait)
 	}
 
 	log.Printf("sna-probe: activation sequence done; observing + auto-acking inbound requests (Ctrl-C to stop)")
@@ -414,6 +414,31 @@ func recv(r *piuReader, wait time.Duration) ([]byte, bool) {
 	summary, _ := sna.DescribeResponse(piu)
 	log.Printf("sna-probe: <- %-3d bytes: % X  [%s]", len(piu), piu, summary)
 	return piu, true
+}
+
+// recvAck reads one PIU during the activation phase and, if it turns out to be
+// an inbound *request* rather than the expected ACTLU response, auto-acknowledges
+// it. With two or more LUs, SNA Server emits each LU both a positive RSP and an
+// unsolicited NOTIFY (status 01); they interleave, so the read meant for a later
+// LU's RSP can land on an earlier LU's NOTIFY. Without acking it here, that NOTIFY
+// would be silently dropped, leaving the earlier LU's SSCP-LU session wedged with
+// an outstanding definite-response request — which is why, with -lus 2,3, LU 3
+// worked but LU 2 came up blank. The observe loop acks anything we don't read here.
+func recvAck(conn llc2.Conn, r *piuReader, wait time.Duration) {
+	piu, ok := recv(r, wait)
+	if !ok {
+		return
+	}
+	p, perr := sna.ParsePIU(piu)
+	if perr != nil || p.RH.Response {
+		return // a response (the ACTLU RSP we expected) — nothing to ack
+	}
+	if rsp, rerr := sna.BuildPositiveResponse(piu); rerr == nil {
+		log.Printf("sna-probe: -> +RSP(%s)  % X", sna.RequestName(p), rsp)
+		if werr := conn.Write(rsp); werr != nil {
+			log.Printf("sna-probe:    +RSP write failed: %v", werr)
+		}
+	}
 }
 
 // startBridge dials the TN3270 back end and couples it to a freshly-bound LU2
